@@ -62,6 +62,104 @@ public sealed class SnapshotDeltaBudgeterTests
     }
 
     [Fact]
+    public void BuildUntrimmedSnapshotEmergencyReductionDoesNotClearAllSoundEventsForKillFeed()
+    {
+        var baseline = CreateSnapshot(106);
+        var killFeedEntry = new SnapshotKillFeedEntry(
+            "Scout",
+            1,
+            "ScatterKL",
+            "Pyro",
+            2,
+            "Scout fragged Pyro",
+            0,
+            5,
+            501,
+            502,
+            EventId: 90)
+        {
+            InvolvedPlayerIds = [501, 502],
+        };
+        var current = CreateSnapshot(107) with
+        {
+            KillFeed = [killFeedEntry],
+            SoundEvents =
+            [
+                new SnapshotSoundEvent("rocket_fire", 10f, 20f, EventId: 701, SourceFrame: 107),
+                new SnapshotSoundEvent("damage_tick", 12f, 22f, EventId: 702, SourceFrame: 107),
+            ],
+        };
+        var contributions = SnapshotContributionPlanner.BuildContributions(
+            new SnapshotContributionPlanningContext(
+                ViewerSlot: 1,
+                FocusX: 0f,
+                FocusY: 0f,
+                Frame: 107,
+                ClientAuthoritativePlayerId: 501),
+            current,
+            baseline);
+
+        var result = SnapshotDeltaBudgeter.BuildUntrimmedSnapshotWithEmergencyReduction(
+            current,
+            baseline,
+            contributions,
+            targetPayloadBytes: SnapshotDeltaBudgeter.TargetSnapshotPayloadBytes);
+
+        Assert.NotEmpty(result.Message.SoundEvents);
+    }
+
+    [Fact]
+    public void BuildUntrimmedSnapshotDoesNotReduceAtNormalMtuPressure()
+    {
+        var baseline = CreateSnapshot(108);
+        var soundEvents = Enumerable.Range(0, 160)
+            .Select(index => new SnapshotSoundEvent(
+                $"bot-spam-{index:D3}-{CreateDeterministicNoise(index, 48)}",
+                X: index * 4f,
+                Y: index * 2f,
+                EventId: (ulong)(800 + index),
+                SourceFrame: 109))
+            .ToArray();
+        var current = CreateSnapshot(109) with
+        {
+            SoundEvents = soundEvents,
+        };
+        var contributions = SnapshotContributionPlanner.BuildContributions(
+            new SnapshotContributionPlanningContext(
+                ViewerSlot: 1,
+                FocusX: 0f,
+                FocusY: 0f,
+                Frame: 109,
+                ClientAuthoritativePlayerId: 501),
+            current,
+            baseline);
+
+        var result = SnapshotDeltaBudgeter.BuildUntrimmedSnapshotWithEmergencyReduction(
+            current,
+            baseline,
+            contributions,
+            targetPayloadBytes: SnapshotDeltaBudgeter.GameplayCriticalEmergencyPayloadBytes);
+
+        Assert.True(result.Payload.Length > SnapshotDeltaBudgeter.TargetSnapshotPayloadBytes);
+        Assert.True(result.Payload.Length <= SnapshotDeltaBudgeter.GameplayCriticalEmergencyPayloadBytes);
+        Assert.False(result.ReductionApplied);
+        Assert.Equal(soundEvents.Length, result.Message.SoundEvents.Count);
+
+        static string CreateDeterministicNoise(int seed, int length)
+        {
+            var chars = new char[length];
+            var value = unchecked((uint)(seed * 747796405 + 2891336453));
+            for (var index = 0; index < chars.Length; index += 1)
+            {
+                value = unchecked(value * 1664525 + 1013904223);
+                chars[index] = (char)('a' + (value % 26));
+            }
+
+            return new string(chars);
+        }
+    }
+
+    [Fact]
     public void BuildContributionsTreatsNewRocketsAsRequiredProjectileSpawns()
     {
         var baseline = CreateSnapshot(110);
@@ -2561,6 +2659,58 @@ public sealed class SnapshotDeltaBudgeterTests
         Assert.Equal(new[] { shot.Id }, merged.RemovedShotIds);
         Assert.Equal(new[] { rocket.Id }, merged.RemovedRocketIds);
         Assert.Equal(completeness, merged.EntityCollectionCompletenessFlags);
+    }
+
+    [Fact]
+    public void SnapshotDeltaMergesHealthPackUpdatesAndRemovals()
+    {
+        var activePack = new SnapshotHealthPackState(
+            Id: -1,
+            Size: 1,
+            X: 128f,
+            Y: 64f,
+            VelocityX: 0f,
+            VelocityY: 0f,
+            TicksRemaining: 0,
+            SourceSpawnIndex: 0,
+            RespawnTicksRemaining: 0,
+            Active: true);
+        var removedPack = new SnapshotHealthPackState(
+            Id: 712,
+            Size: 0,
+            X: 256f,
+            Y: 96f,
+            VelocityX: 1f,
+            VelocityY: 2f,
+            TicksRemaining: 180,
+            SourceSpawnIndex: -1,
+            RespawnTicksRemaining: 0,
+            Active: true);
+        var inactivePack = activePack with
+        {
+            X = 130f,
+            Active = false,
+            RespawnTicksRemaining = 90,
+        };
+        var baseline = CreateSnapshot(420) with
+        {
+            HealthPacks = [activePack, removedPack],
+        };
+        var delta = CreateSnapshot(421) with
+        {
+            IsDelta = true,
+            BaselineFrame = baseline.Frame,
+            HealthPacks = [inactivePack],
+            RemovedHealthPackIds = [removedPack.Id],
+        };
+
+        var merged = SnapshotDelta.ToFullSnapshot(delta, baseline);
+
+        var healthPack = Assert.Single(merged.HealthPacks);
+        Assert.Equal(activePack.Id, healthPack.Id);
+        Assert.False(healthPack.Active);
+        Assert.Equal(90, healthPack.RespawnTicksRemaining);
+        Assert.Empty(merged.RemovedHealthPackIds);
     }
 
     [Fact]

@@ -9,6 +9,10 @@ public sealed partial class SimulationWorld
     private const float PyroAirblastMaskRight = 96f;
     private const float PyroAirblastMaskTop = -13f;
     private const float PyroAirblastMaskBottom = 14f;
+    private const float PyroAirblastPlayerMaskLeft = 12f;
+    private const float PyroAirblastPlayerMaskRight = 84f;
+    private const float PyroAirblastPlayerMaskTop = -10f;
+    private const float PyroAirblastPlayerMaskBottom = 11f;
     private const float PyroAirblastMineSpeedFloor = 28f / 3f;
     private const float PyroAirblastLooseBodyImpulse = 28f;
     private const float PyroAirblastPlayerImpulse = 15f * LegacyMovementModel.SourceTicksPerSecond;
@@ -31,6 +35,7 @@ public sealed partial class SimulationWorld
         RegisterSoundEvent(player, "CompressionBlastSnd");
         RegisterVisualEffect("AirBlast", poofX, poofY, aimDegrees);
         ApplyAirblastToSelf(player, sourceX, sourceY, aimRadians);
+        var applyTeammateKnockback = this.ExperimentalGameplaySettings.EnableFriendlyAirburstKnockback;
         ApplyAirblastToPlayers(
             player,
             sourceX,
@@ -40,7 +45,8 @@ public sealed partial class SimulationWorld
             poofY,
             affectEnemies: false,
             affectTeammates: true,
-            carryTeammatesWithPlayerVelocity: true);
+            applyTeammateKnockback: applyTeammateKnockback,
+            carryTeammatesWithPlayerVelocity: applyTeammateKnockback);
         PushLooseBodies(sourceX, sourceY, aimRadians, poofX, poofY);
     }
 
@@ -60,7 +66,14 @@ public sealed partial class SimulationWorld
         ReflectEnemyFlares(player, aimRadians, poofX, poofY);
         ReflectEnemyGrenades(player, aimRadians, poofX, poofY);
         PushEnemyMines(player.Team, aimRadians, poofX, poofY);
-        ApplyAirblastToPlayers(player, sourceX, sourceY, aimRadians, poofX, poofY);
+        ApplyAirblastToPlayers(
+            player,
+            sourceX,
+            sourceY,
+            aimRadians,
+            poofX,
+            poofY,
+            applyTeammateKnockback: this.ExperimentalGameplaySettings.EnableFriendlyAirblastKnockback);
         PushLooseBodies(sourceX, sourceY, aimRadians, poofX, poofY);
     }
 
@@ -231,18 +244,23 @@ public sealed partial class SimulationWorld
         float poofY,
         bool affectEnemies = true,
         bool affectTeammates = true,
+        bool applyTeammateKnockback = false,
         bool carryTeammatesWithPlayerVelocity = false)
     {
         foreach (var target in EnumerateSimulatedPlayers())
         {
-            if (!target.IsAlive
-                || target.Id == player.Id
-                || !IsWithinAirblastMask(poofX, poofY, aimRadians, target.X, target.Y, PyroAirblastTargetRadius))
+            if (!target.IsAlive || target.Id == player.Id)
             {
                 continue;
             }
 
             var targetIsTeammate = target.Team == player.Team;
+            var useFriendlyAirburstMask = targetIsTeammate && carryTeammatesWithPlayerVelocity;
+            if (!IsWithinAirblastPlayerMask(poofX, poofY, aimRadians, target.X, target.Y, PyroAirblastTargetRadius, useFriendlyAirburstMask))
+            {
+                continue;
+            }
+
             if (targetIsTeammate ? !affectTeammates : !affectEnemies)
             {
                 continue;
@@ -252,6 +270,10 @@ public sealed partial class SimulationWorld
             {
                 SpawnAirblastExtinguishFlames(player, target, aimRadians);
                 target.ExtinguishAfterburn();
+                if (!applyTeammateKnockback)
+                {
+                    continue;
+                }
             }
 
             var scale = GetAirblastScale(sourceX, sourceY, target.X, target.Y);
@@ -267,6 +289,11 @@ public sealed partial class SimulationWorld
 
             if (targetIsTeammate && carryTeammatesWithPlayerVelocity)
             {
+                if (target.IsGrounded)
+                {
+                    continue;
+                }
+
                 target.AddImpulse(
                     player.HorizontalSpeed - target.HorizontalSpeed,
                     player.VerticalSpeed - target.VerticalSpeed);
@@ -388,6 +415,58 @@ public sealed partial class SimulationWorld
 
     private static bool IsWithinAirblastMask(float poofX, float poofY, float aimRadians, float targetX, float targetY, float radius)
     {
+        return IsWithinAirblastMask(
+            poofX,
+            poofY,
+            aimRadians,
+            targetX,
+            targetY,
+            radius,
+            PyroAirblastMaskLeft,
+            PyroAirblastMaskTop,
+            PyroAirblastMaskRight,
+            PyroAirblastMaskBottom);
+    }
+
+    private static bool IsWithinAirblastPlayerMask(
+        float poofX,
+        float poofY,
+        float aimRadians,
+        float targetX,
+        float targetY,
+        float radius,
+        bool useFriendlyAirburstMask)
+    {
+        if (!useFriendlyAirburstMask)
+        {
+            return IsWithinAirblastMask(poofX, poofY, aimRadians, targetX, targetY, radius);
+        }
+
+        return IsWithinAirblastMask(
+            poofX,
+            poofY,
+            aimRadians,
+            targetX,
+            targetY,
+            radius,
+            PyroAirblastPlayerMaskLeft,
+            PyroAirblastPlayerMaskTop,
+            PyroAirblastPlayerMaskRight,
+            PyroAirblastPlayerMaskBottom);
+    }
+
+    private static bool IsWithinAirblastMask(
+        float poofX,
+        float poofY,
+        float aimRadians,
+        float targetX,
+        float targetY,
+        float radius,
+        float maskLeft,
+        float maskTop,
+        float maskRight,
+        float maskBottom)
+    {
         var deltaX = targetX - poofX;
         var deltaY = targetY - poofY;
         var cosine = MathF.Cos(aimRadians);
@@ -399,10 +478,10 @@ public sealed partial class SimulationWorld
             localX,
             localY,
             radius,
-            PyroAirblastMaskLeft,
-            PyroAirblastMaskTop,
-            PyroAirblastMaskRight,
-            PyroAirblastMaskBottom);
+            maskLeft,
+            maskTop,
+            maskRight,
+            maskBottom);
     }
 
     private static float PointDirectionRadians(float x1, float y1, float x2, float y2, float fallbackDirectionX)

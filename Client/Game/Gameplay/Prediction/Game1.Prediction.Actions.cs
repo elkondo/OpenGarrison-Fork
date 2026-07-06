@@ -268,9 +268,14 @@ public partial class Game1
         }
 
         if (player.ClassId == PlayerClass.Spy
-            && predictedInput.PrimaryPressed
-            && TryPredictedStartSpyBackstab(player))
+            && player.IsSpyCloaked
+            && predictedInput.Input.FirePrimary)
         {
+            if (IsPredictedSpyBackstabReady())
+            {
+                _ = TryPredictedStartSpyBackstab(player);
+            }
+
             return;
         }
 
@@ -576,6 +581,68 @@ public partial class Game1
         TriggerLocalWeaponFireHudRumble(GetPredictedWeaponFireHudRumbleIntensity(player));
         SyncPredictedLocalPlayerState(player);
         return true;
+    }
+
+    private void ApplyPredictedTaunt(PlayerEntity player, PredictedLocalInput predictedInput)
+    {
+        if (!predictedInput.TauntPressed)
+        {
+            return;
+        }
+
+        if (player.ClassId == PlayerClass.Quote && player.IsCivviePogoActive)
+        {
+            if (TryPredictedStartCivviePogoTrick(player))
+            {
+                SyncPredictedLocalPlayerState(player);
+            }
+
+            return;
+        }
+
+        if (player.TryStartTaunt())
+        {
+            if (player.ClassId == PlayerClass.Quote)
+            {
+                player.BeginPendingCivvieTauntHeal();
+            }
+
+            SyncPredictedLocalPlayerState(player);
+        }
+    }
+
+    private bool TryPredictedStartCivviePogoTrick(PlayerEntity player)
+    {
+        var ability = GetPredictedCivvieTauntAbility(player);
+        var trickFrameCount = ability is null
+            ? PlayerEntity.CivviePogoTrickFrameCountDefault
+            : GameplayAbilityParameterReader.GetInt(
+                ability,
+                "pogoTrickFrameCount",
+                PlayerEntity.CivviePogoTrickFrameCountDefault,
+                minValue: 1);
+        var requestedDurationTicks = ability is null
+            ? PlayerEntity.CivviePogoTrickDurationTicksDefault
+            : GameplayAbilityParameterReader.GetInt(
+                ability,
+                "pogoTrickDurationTicks",
+                PlayerEntity.CivviePogoTrickDurationTicksDefault,
+                minValue: 1);
+        var trickDurationTicks = PlayerEntity.ResolveCivviePogoTrickDurationTicks(
+            requestedDurationTicks,
+            _config.TicksPerSecond);
+        return player.TryStartCivviePogoTrick(trickFrameCount, trickDurationTicks);
+    }
+
+    private static GameplayAbilityDefinition? GetPredictedCivvieTauntAbility(PlayerEntity player)
+    {
+        return CharacterClassCatalog.RuntimeRegistry.TryGetGameplayAbilityDefinition(
+                player.GameplayLoadoutState.UtilityItemId,
+                out _,
+                out var ability)
+            && string.Equals(ability.Category, GameplayAbilityConstants.TauntCategory, StringComparison.Ordinal)
+            ? ability
+            : null;
     }
 
     private int CountPredictedLocalOwnedMines(int ownerId)

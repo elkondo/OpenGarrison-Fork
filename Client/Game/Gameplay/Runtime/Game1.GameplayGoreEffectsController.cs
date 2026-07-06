@@ -86,21 +86,27 @@ public partial class Game1
             for (var index = _game._backstabVisuals.Count - 1; index >= 0; index -= 1)
             {
                 var visual = _game._backstabVisuals[index];
+                if (IsBackstabVisualOwnerInactive(visual.Animation.OwnerId))
+                {
+                    _game._backstabVisuals.RemoveAt(index);
+                    continue;
+                }
+
                 visual.PendingSourceTicks += sourceTickAdvance;
-                var removeVisual = false;
                 while (visual.PendingSourceTicks >= 1f && !visual.Animation.IsExpired)
                 {
                     visual.PendingSourceTicks -= 1f;
-                    if (!TryGetBackstabOwnerPosition(visual.Animation.OwnerId, out var ownerPosition))
+                    if (TryGetBackstabOwnerPosition(visual.Animation.OwnerId, out var ownerPosition))
                     {
-                        removeVisual = true;
-                        break;
+                        visual.Animation.AdvanceOneTick(ownerPosition.X, ownerPosition.Y);
                     }
-
-                    visual.Animation.AdvanceOneTick(ownerPosition.X, ownerPosition.Y);
+                    else
+                    {
+                        visual.Animation.AdvanceOneTick(visual.Animation.X, visual.Animation.Y);
+                    }
                 }
 
-                if (removeVisual || visual.Animation.IsExpired)
+                if (visual.Animation.IsExpired)
                 {
                     _game._backstabVisuals.RemoveAt(index);
                 }
@@ -115,8 +121,12 @@ public partial class Game1
                 if (backstabVisual.OwnerId != 0)
                 {
                     var owner = _game.FindPlayerById(backstabVisual.OwnerId);
-                    if (owner is not null
-                        && owner.IsAlive
+                    if (owner is null || !owner.IsAlive || owner.ClassId != PlayerClass.Spy)
+                    {
+                        continue;
+                    }
+
+                    if (owner.IsAlive
                         && owner.ClassId == PlayerClass.Spy
                         && _game.IsSpyHiddenFromLocalViewer(owner))
                     {
@@ -126,6 +136,17 @@ public partial class Game1
 
                 _game.DrawStabAnimation(backstabVisual, cameraPosition);
             }
+        }
+
+        private bool IsBackstabVisualOwnerInactive(int ownerId)
+        {
+            if (ownerId == 0)
+            {
+                return false;
+            }
+
+            var owner = _game.FindPlayerById(ownerId);
+            return owner is null || !owner.IsAlive || owner.ClassId != PlayerClass.Spy;
         }
 
         public void DrawBloodVisuals(Vector2 cameraPosition)
@@ -246,6 +267,8 @@ public partial class Game1
                 var animation = _game._backstabVisuals[index].Animation;
                 if (ownerId != 0 && animation.OwnerId == ownerId)
                 {
+                    _game._backstabVisuals[index] = new BackstabVisual(
+                        new StabAnimEntity(_game._nextClientBackstabVisualId--, ownerId, team, x, y, normalizedDirection));
                     return;
                 }
 

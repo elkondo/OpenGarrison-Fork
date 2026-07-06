@@ -24,6 +24,7 @@ public sealed partial class SimulationWorld
     private const int CombatTraceLifetimeTicks = 3;
     private const int KillFeedLifetimeTicks = 150;
     private const int KillFeedLocalInvolvedLifetimeTicks = 300;
+    private const int DeathCamFocusFreezeDelayTicks = 60;
     private const int DefaultGibLevel = 3;
     private const int LocalProjectileTerminationSuppressionTicks = 12;
     private const int NetworkProjectileRemovalSuppressionTicks = 180;
@@ -50,6 +51,7 @@ public sealed partial class SimulationWorld
     private readonly List<PlayerGibEntity> _playerGibs = new();
     private readonly List<BloodDropEntity> _bloodDrops = new();
     private readonly List<HealthPackEntity> _healthPacks = new();
+    private readonly List<int> _healthPackSpawnRespawnTicks = new();
     private readonly CivvieMoneyTrailTracker _civvieMoneyTrailTracker = new();
     private readonly List<DroppedWeaponEntity> _droppedWeapons = new();
     private readonly List<DeadBodyEntity> _deadBodies = new();
@@ -68,6 +70,7 @@ public sealed partial class SimulationWorld
     private readonly List<PlayerEntity> _remoteSnapshotScoreboardPlayers = new();
     private readonly List<ScoreboardSpectatorEntry> _spectators = new();
     private readonly Dictionary<byte, PlayerEntity> _remoteSnapshotPlayersBySlot = new();
+    private readonly Dictionary<byte, PlayerEntity> _remoteSnapshotScoreboardPlayersBySlot = new();
     private readonly HashSet<int> _snapshotSeenEntityIds = new();
     private readonly List<int> _snapshotStaleEntityIds = new();
     private readonly HashSet<ulong> _processedNetworkGibSpawnEventIds = new();
@@ -91,9 +94,11 @@ public sealed partial class SimulationWorld
     private readonly Dictionary<byte, PlayerTeam> _additionalNetworkPlayerTeams = new();
     private readonly HashSet<byte> _pendingNetworkPlayerTeamSelections = new();
     private readonly Dictionary<byte, SpawnPoint> _networkPlayerSpawnOverrides = new();
+    private readonly HashSet<byte> _networkPlayerMapSpawnClassBehaviorBypassSlots = new();
     private readonly Dictionary<byte, float> _networkPlayerMovementSpeedScaleOverrides = new();
     private readonly Dictionary<byte, float> _networkPlayerGravityScaleOverrides = new();
     private readonly Dictionary<byte, int> _networkPlayerMaxHealthOverrides = new();
+    private readonly Dictionary<PlayerClass, int> _configuredClassLimits = new();
     private readonly Dictionary<byte, LocalDeathCamState> _networkPlayerDeathCams = new();
     private readonly HashSet<int> _lastToDieDroneSentryIds = new();
     private readonly HashSet<int> _clientPredictedProjectileIds = new();
@@ -114,6 +119,8 @@ public sealed partial class SimulationWorld
     private float _configuredGravityScale = 1f;
     private float _configuredHorizontalSpeedClampPerTick = LegacyMovementModel.MaxStepSpeedPerTick;
     private float _configuredVerticalSpeedClampPerTick = LegacyMovementModel.MaxStepSpeedPerTick;
+    private float _configuredCaptureSpeedMultiplierPerPlayer = 2f;
+    private bool _vipAllowDuplicateClasses;
     private bool _roundEndFriendlyFireEnabled;
     private readonly Dictionary<int, int> _deterministicSpreadShotIndexByPlayerId = new();
     private CharacterClassDefinition _localPlayerClassDefinition = CharacterClassCatalog.Scout;
@@ -244,6 +251,10 @@ public sealed partial class SimulationWorld
     public float ConfiguredHorizontalSpeedClampPerTick => _configuredHorizontalSpeedClampPerTick;
 
     public float ConfiguredVerticalSpeedClampPerTick => _configuredVerticalSpeedClampPerTick;
+
+    public float ConfiguredCaptureSpeedMultiplierPerPlayer => _configuredCaptureSpeedMultiplierPerPlayer;
+
+    public bool VipAllowDuplicateClasses => _vipAllowDuplicateClasses;
 
     public bool RoundEndFriendlyFireEnabled => _roundEndFriendlyFireEnabled;
 
@@ -434,6 +445,7 @@ public sealed partial class SimulationWorld
         ApplyServerGameplayTuning(slot: 0, FriendlyDummy);
         FriendlyDummy.Kill();
         _entities.Add(FriendlyDummy.Id, FriendlyDummy);
+        ResetHealthPackSpawnsForLevel();
     }
 
     public void ConfigureExperimentalGameplaySettings(ExperimentalGameplaySettings settings)
@@ -447,7 +459,7 @@ public sealed partial class SimulationWorld
 
         if (!ExperimentalGameplaySettings.EnableEnemyHealthPackDrops)
         {
-            ClearHealthPacks();
+            ClearTemporaryHealthPacks();
         }
         if (!ExperimentalGameplaySettings.EnableEnemyDroppedWeapons)
         {
@@ -521,7 +533,7 @@ public sealed partial class SimulationWorld
 
     public bool TrySetLocalClass(string gameplayClassId)
     {
-        var definition = CharacterClassCatalog.GetDefinition(gameplayClassId);
+        var definition = ResolveMapForcedClassDefinition(LocalPlayerSlot, CharacterClassCatalog.GetDefinition(gameplayClassId));
         if (string.Equals(definition.GameplayClassId, GetNetworkPlayerClassDefinition(LocalPlayerSlot).GameplayClassId, StringComparison.Ordinal))
         {
             // Allow same-class selection to commit a pending team swap.

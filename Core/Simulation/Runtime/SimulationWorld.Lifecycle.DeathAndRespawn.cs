@@ -60,6 +60,7 @@ public sealed partial class SimulationWorld
         if (gibbed)
         {
             player.AddGibDeath();
+            MarkPendingFatalPlayerDamageEventGibbed(player.Id);
         }
 
         if (killer is not null && !ReferenceEquals(killer, player))
@@ -282,12 +283,17 @@ public sealed partial class SimulationWorld
 
     private LocalDeathCamState AdvanceDeathCamState(LocalDeathCamState deathCam)
     {
-        return ResolveTrackedDeathCamFocus(deathCam with { RemainingTicks = deathCam.RemainingTicks - 1 });
+        var advanced = deathCam with { RemainingTicks = deathCam.RemainingTicks - 1 };
+        return IsDeathCamFocusFrozen(advanced)
+            ? advanced
+            : ResolveTrackedDeathCamFocus(advanced);
     }
 
     private LocalDeathCamState ResolveTrackedDeathCamFocus(LocalDeathCamState deathCam)
     {
-        if (deathCam.FocusPlayerId <= 0 || FindPlayerById(deathCam.FocusPlayerId) is not { } focusPlayer)
+        if (IsDeathCamFocusFrozen(deathCam)
+            || deathCam.FocusPlayerId <= 0
+            || FindPlayerById(deathCam.FocusPlayerId) is not { } focusPlayer)
         {
             return deathCam;
         }
@@ -299,6 +305,14 @@ public sealed partial class SimulationWorld
         };
     }
 
+    private static bool IsDeathCamFocusFrozen(LocalDeathCamState deathCam)
+    {
+        var initialTicks = deathCam.InitialTicks > 0
+            ? deathCam.InitialTicks
+            : deathCam.RemainingTicks;
+        return Math.Max(0, initialTicks - deathCam.RemainingTicks) >= DeathCamFocusFreezeDelayTicks;
+    }
+
     private void AdvanceNetworkRespawnTimer(byte slot)
     {
         if (IsNetworkPlayerAwaitingJoin(slot)
@@ -307,7 +321,7 @@ public sealed partial class SimulationWorld
             return;
         }
 
-        if (MatchRules.Mode == GameModeKind.Arena && !MatchState.IsEnded)
+        if (MatchRules.Mode == GameModeKind.Arena)
         {
             return;
         }
@@ -334,7 +348,7 @@ public sealed partial class SimulationWorld
             return;
         }
 
-        if (MatchRules.Mode == GameModeKind.Arena && !MatchState.IsEnded)
+        if (MatchRules.Mode == GameModeKind.Arena)
         {
             return;
         }

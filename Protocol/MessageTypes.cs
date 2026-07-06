@@ -792,6 +792,18 @@ public sealed record SnapshotDamageEvent(
     ulong SourceFrame = 0,
     byte Flags = 0);
 
+public sealed record SnapshotHealthPackState(
+    int Id,
+    byte Size,
+    float X,
+    float Y,
+    float VelocityX,
+    float VelocityY,
+    int TicksRemaining,
+    int SourceSpawnIndex,
+    int RespawnTicksRemaining,
+    bool Active);
+
 public enum SnapshotReplicatedStateValueKind : byte
 {
     Whole = 1,
@@ -907,6 +919,7 @@ public sealed record SnapshotMessage(
     public int ArenaBlueConsecutiveWins { get; init; }
     public byte CompetitiveReadyUpPhase { get; init; }
     public int CompetitiveReadyUpTicksRemaining { get; init; }
+    public int CapLimit { get; init; }
 
     public ulong BaselineFrame { get; init; }
     public bool IsDelta { get; init; }
@@ -914,6 +927,7 @@ public sealed record SnapshotMessage(
     public IReadOnlyList<SnapshotPlayerStatusState> PlayerStatusStates { get; init; } = Array.Empty<SnapshotPlayerStatusState>();
     public IReadOnlyList<SnapshotPlayerChatBubbleState> PlayerChatBubbleStates { get; init; } = Array.Empty<SnapshotPlayerChatBubbleState>();
     public IReadOnlyList<SnapshotPlayerExtendedStatusState> PlayerExtendedStatusStates { get; init; } = Array.Empty<SnapshotPlayerExtendedStatusState>();
+    public IReadOnlyList<SnapshotPlayerState> ScoreboardPlayers { get; init; } = Array.Empty<SnapshotPlayerState>();
     public IReadOnlyList<SnapshotSentryUpdateState> SentryUpdateStates { get; init; } = Array.Empty<SnapshotSentryUpdateState>();
     public IReadOnlyList<int> RemovedPlayerIds { get; init; } = Array.Empty<int>();
     public IReadOnlyList<int> RemovedSentryIds { get; init; } = Array.Empty<int>();
@@ -936,6 +950,8 @@ public sealed record SnapshotMessage(
     public IReadOnlyList<int> RemovedJumpPadIds { get; init; } = Array.Empty<int>();
     public IReadOnlyList<SnapshotJumpPadGibState> JumpPadGibs { get; init; } = Array.Empty<SnapshotJumpPadGibState>();
     public IReadOnlyList<int> RemovedJumpPadGibIds { get; init; } = Array.Empty<int>();
+    public IReadOnlyList<SnapshotHealthPackState> HealthPacks { get; init; } = Array.Empty<SnapshotHealthPackState>();
+    public IReadOnlyList<int> RemovedHealthPackIds { get; init; } = Array.Empty<int>();
     public IReadOnlyList<SnapshotPlayerGibState> PlayerGibs { get; init; } = Array.Empty<SnapshotPlayerGibState>();
     public IReadOnlyList<SnapshotGibSpawnEvent> GibSpawnEvents { get; init; } = Array.Empty<SnapshotGibSpawnEvent>();
     public IReadOnlyList<SnapshotRocketSpawnEvent> RocketSpawnEvents { get; init; } = Array.Empty<SnapshotRocketSpawnEvent>();

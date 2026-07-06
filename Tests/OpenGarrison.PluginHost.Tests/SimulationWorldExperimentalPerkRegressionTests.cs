@@ -163,6 +163,15 @@ public sealed class SimulationWorldExperimentalPerkRegressionTests
     }
 
     [Fact]
+    public void ExperimentalGameplaySettings_DefaultsFriendlyExplosionAndAirburstBoostsToTrue()
+    {
+        var settings = new ExperimentalGameplaySettings();
+        Assert.True(settings.EnableFriendlyExplosionBoost);
+        Assert.False(settings.EnableFriendlyAirblastKnockback);
+        Assert.True(settings.EnableFriendlyAirburstKnockback);
+    }
+
+    [Fact]
     public void StockPyroRightClickAirblastsWhenSpecialAbilitiesAreDisabled()
     {
         var world = CreateJoinedPyroWorld(new ExperimentalGameplaySettings(EnableSecondaryAbilities: false));
@@ -175,9 +184,76 @@ public sealed class SimulationWorldExperimentalPerkRegressionTests
     }
 
     [Fact]
-    public void StockPyroAirblastPushesTeammates()
+    public void StockPyroAirblastDoesNotMoveTeammatesByDefault()
     {
         var world = CreateJoinedPyroWorld(new ExperimentalGameplaySettings());
+        AdvanceTicks(world, 1);
+        Assert.True(world.TryMoveLocalPlayerToControlPointSpawn());
+        var teammate = CreateNetworkSoldier(world, 2);
+        PlaceTeammateInPyroAirblastRange(world, teammate);
+        Assert.False(world.ExperimentalGameplaySettings.EnableFriendlyAirblastKnockback);
+        Assert.Equal(world.LocalPlayer.Team, teammate.Team);
+
+        PressFireSecondary(world);
+
+        Assert.Equal(0f, teammate.HorizontalSpeed);
+        Assert.Equal(0f, teammate.VerticalSpeed);
+    }
+
+    [Fact]
+    public void PyroUtilityAirburstDoesNotMoveTeammatesWhenFriendlyAirburstKnockbackDisabled()
+    {
+        var world = CreateJoinedPyroWorld(new ExperimentalGameplaySettings(EnableFriendlyAirburstKnockback: false));
+        AdvanceTicks(world, 1);
+        Assert.True(world.TryMoveLocalPlayerToControlPointSpawn());
+        var teammate = CreateNetworkSoldier(world, 2);
+        PlaceTeammateInPyroAirblastRange(world, teammate);
+        Assert.False(world.ExperimentalGameplaySettings.EnableFriendlyAirburstKnockback);
+        Assert.Equal(world.LocalPlayer.Team, teammate.Team);
+
+        PressUseAbilitySpace(world, world.LocalPlayer.X + 96f, world.LocalPlayer.Y + 32f);
+
+        Assert.Equal(0f, teammate.HorizontalSpeed);
+        Assert.Equal(0f, teammate.VerticalSpeed);
+    }
+
+    [Fact]
+    public void FriendlyPyroAirburstUsesNarrowerPlayerConeThanAirblast()
+    {
+        var method = typeof(SimulationWorld).GetMethod(
+            "IsWithinAirblastPlayerMask",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        object[] sharedArguments =
+        [
+            0f,
+            0f,
+            0f,
+            50f,
+            37f,
+            25f,
+            false,
+        ];
+        object[] airburstArguments =
+        [
+            0f,
+            0f,
+            0f,
+            50f,
+            37f,
+            25f,
+            true,
+        ];
+
+        Assert.True((bool)method!.Invoke(null, sharedArguments)!);
+        Assert.False((bool)method.Invoke(null, airburstArguments)!);
+    }
+
+    [Fact]
+    public void StockPyroAirblastPushesTeammatesWhenFriendlyAirblastKnockbackEnabled()
+    {
+        var world = CreateJoinedPyroWorld(new ExperimentalGameplaySettings(EnableFriendlyAirblastKnockback: true));
         AdvanceTicks(world, 1);
         Assert.True(world.TryMoveLocalPlayerToControlPointSpawn());
         var teammate = CreateNetworkSoldier(world, 2);
@@ -196,7 +272,27 @@ public sealed class SimulationWorldExperimentalPerkRegressionTests
     }
 
     [Fact]
-    public void PyroUtilityAirburstCarriesTeammatesWithPyroVelocity()
+    public void PyroUtilityAirburstDoesNotCarryGroundedTeammatesByDefault()
+    {
+        var world = CreateJoinedPyroWorld(new ExperimentalGameplaySettings());
+        AdvanceTicks(world, 1);
+        Assert.True(world.TryMoveLocalPlayerToControlPointSpawn());
+        var teammate = CreateNetworkSoldier(world, 2);
+        PlaceTeammateInPyroAirblastRange(world, teammate);
+        var fuelBefore = world.LocalPlayer.PyroPrimaryFuelScaled;
+        var primaryCooldownBefore = world.LocalPlayer.PrimaryCooldownTicks;
+
+        PressUseAbilitySpace(world, world.LocalPlayer.X + 96f, world.LocalPlayer.Y + 32f);
+
+        Assert.True(teammate.IsGrounded);
+        Assert.Equal(0f, teammate.HorizontalSpeed);
+        Assert.Equal(0f, teammate.VerticalSpeed);
+        Assert.Equal(fuelBefore - (PlayerEntity.PyroAirburstCost * PlayerEntity.PyroPrimaryFuelScale), world.LocalPlayer.PyroPrimaryFuelScaled);
+        Assert.Equal(Math.Max(0, primaryCooldownBefore - 1), world.LocalPlayer.PrimaryCooldownTicks);
+    }
+
+    [Fact]
+    public void PyroUtilityAirburstCarriesAirborneTeammatesWithPyroVelocityByDefault()
     {
         var world = CreateJoinedPyroWorld(new ExperimentalGameplaySettings());
         AdvanceTicks(world, 1);
@@ -204,7 +300,8 @@ public sealed class SimulationWorldExperimentalPerkRegressionTests
         var teammate = CreateNetworkSoldier(world, 2);
         teammate.TeleportTo(world.LocalPlayer.X + 64f, world.LocalPlayer.Y);
         teammate.SetSpawnRoomState(false);
-        teammate.ApplyVelocityImpulse(0f, 0f);
+        teammate.ApplyVelocityImpulse(0f, -1f);
+        SetPlayerProperty(teammate, nameof(PlayerEntity.IsGrounded), false);
         var fuelBefore = world.LocalPlayer.PyroPrimaryFuelScaled;
         var primaryCooldownBefore = world.LocalPlayer.PrimaryCooldownTicks;
 
@@ -1427,6 +1524,30 @@ public sealed class SimulationWorldExperimentalPerkRegressionTests
     }
 
     [Fact]
+    public void SpyIntelPickupDuringSuperjumpHaltsHorizontalMomentumOnly()
+    {
+        var world = CreateJoinedSpyWorld(new ExperimentalGameplaySettings());
+        AdvanceTicks(world, 1);
+        world.LocalPlayer.ApplyVelocityImpulse(240f, -300f);
+        SetPlayerProperty(world.LocalPlayer, nameof(PlayerEntity.IsGrounded), false);
+        SetPlayerProperty(world.LocalPlayer, nameof(PlayerEntity.IsSpySuperjumping), true);
+        SetPlayerProperty(world.LocalPlayer, nameof(PlayerEntity.SpySuperjumpHorizontalVelocity), 240f);
+
+        Assert.True(world.LocalPlayer.IsSpySuperjumping);
+        Assert.False(world.LocalPlayer.IsGrounded);
+        Assert.True(MathF.Abs(world.LocalPlayer.HorizontalSpeed) > 0f);
+        var verticalSpeedBeforePickup = world.LocalPlayer.VerticalSpeed;
+        Assert.NotEqual(0f, verticalSpeedBeforePickup);
+
+        Assert.True(world.ForceGiveEnemyIntelToLocalPlayer());
+
+        Assert.True(world.LocalPlayer.IsCarryingIntel);
+        Assert.Equal(0f, world.LocalPlayer.HorizontalSpeed);
+        Assert.Equal(0f, world.LocalPlayer.SpySuperjumpHorizontalVelocity);
+        Assert.Equal(verticalSpeedBeforePickup, world.LocalPlayer.VerticalSpeed);
+    }
+
+    [Fact]
     public void HealingCabinetRefreshesSpecialAbilityCooldowns()
     {
         var world = CreateJoinedHeavyWorld(new ExperimentalGameplaySettings());
@@ -1468,6 +1589,34 @@ public sealed class SimulationWorldExperimentalPerkRegressionTests
         Assert.Equal(GameplayEquipmentSlot.Secondary, world.LocalPlayer.SelectedGameplayEquippedSlot);
         Assert.Equal(GameplayEquipmentSlot.Secondary, world.LocalPlayer.GameplayLoadoutState.EquippedSlot);
         Assert.Equal(world.LocalPlayer.GameplayLoadoutState.SecondaryItemId, world.LocalPlayer.GameplayLoadoutState.EquippedItemId);
+    }
+
+    [Fact]
+    public void HealingCabinetRefreshesCivilianUmbrellaWithoutAmmoDeficit()
+    {
+        var world = CreateJoinedCivilianWorld(new ExperimentalGameplaySettings());
+        AdvanceTicks(world, 1);
+        Assert.True(world.TryMoveLocalPlayerToControlPointSpawn());
+        Assert.True(world.LocalPlayer.TryActivateCivvieUmbrella());
+        Assert.True(world.LocalPlayer.TryAbsorbCivvieUmbrellaHit());
+        Assert.True(world.LocalPlayer.CivvieUmbrellaChargeTicks < PlayerEntity.CivvieUmbrellaMaxChargeTicks);
+
+        world.LocalPlayer.ForceSetHealth(world.LocalPlayer.MaxHealth);
+        world.LocalPlayer.ForceSetAmmo(world.LocalPlayer.MaxShells);
+        world.SetLocalInput(default);
+        world.DrainPendingSoundEvents();
+        var cabinet = world.Level.GetRoomObjects(RoomObjectType.HealingCabinet).First();
+        world.TeleportLocalPlayer(cabinet.CenterX, cabinet.CenterY);
+
+        world.AdvanceOneTick();
+
+        Assert.True(world.LocalPlayer.IsUsingHealingCabinet);
+        Assert.Equal(PlayerEntity.CivvieUmbrellaMaxChargeTicks, world.LocalPlayer.CivvieUmbrellaChargeTicks);
+        Assert.False(world.LocalPlayer.IsCivvieUmbrellaBroken);
+        var cabinetSound = Assert.Single(world.DrainPendingSoundEvents(), static soundEvent => soundEvent.SoundName == "CbntHealSnd");
+        Assert.Equal(world.LocalPlayer.Id, cabinetSound.SourcePlayerId);
+        Assert.Equal(cabinet.CenterX, cabinetSound.X);
+        Assert.Equal(cabinet.CenterY, cabinetSound.Y);
     }
 
     [Fact]
@@ -2970,6 +3119,8 @@ public sealed class SimulationWorldExperimentalPerkRegressionTests
         world.PrepareLocalPlayerJoin();
         world.SetLocalPlayerTeam(PlayerTeam.Red);
         world.CompleteLocalPlayerJoin(PlayerClass.Pyro);
+        world.DespawnFriendlyDummy();
+        world.DespawnEnemyDummy();
         world.ConfigureExperimentalGameplaySettings(settings);
         return world;
     }
@@ -3225,6 +3376,30 @@ public sealed class SimulationWorldExperimentalPerkRegressionTests
         Assert.True(world.TryApplyNetworkPlayerClassSelection(slot, PlayerClass.Soldier));
         Assert.True(world.TryGetNetworkPlayer(slot, out var player));
         return player;
+    }
+
+    private static void PlaceTeammateInPyroAirblastRange(SimulationWorld world, PlayerEntity teammate)
+    {
+        teammate.TeleportTo(world.LocalPlayer.X + 64f, world.LocalPlayer.Y);
+        teammate.ResolveBlockingOverlap(world.Level, teammate.Team);
+        teammate.SetSpawnRoomState(false);
+        for (var tick = 0; tick < world.Config.TicksPerSecond * 3; tick += 1)
+        {
+            if (!teammate.IsGrounded)
+            {
+                teammate.TeleportTo(teammate.X, teammate.Y + 8f);
+                teammate.ResolveBlockingOverlap(world.Level, teammate.Team);
+            }
+
+            world.AdvanceOneTick();
+            if (teammate.IsGrounded)
+            {
+                break;
+            }
+        }
+
+        teammate.ApplyVelocityImpulse(0f, 0f);
+        Assert.True(teammate.IsGrounded, "teammate must be grounded before airblast movement assertions");
     }
 
     private static void PressJump(SimulationWorld world)
@@ -3952,5 +4127,17 @@ public sealed class SimulationWorldExperimentalPerkRegressionTests
         }
 
         throw new InvalidOperationException($"Could not find PlayerEntity.{methodName}.");
+    }
+
+    private static void SetPlayerProperty<T>(PlayerEntity player, string propertyName, T value)
+    {
+        var property = typeof(PlayerEntity).GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public);
+        var setter = property?.GetSetMethod(nonPublic: true);
+        if (setter is null)
+        {
+            throw new InvalidOperationException($"Could not find settable PlayerEntity.{propertyName}.");
+        }
+
+        setter.Invoke(player, [value]);
     }
 }

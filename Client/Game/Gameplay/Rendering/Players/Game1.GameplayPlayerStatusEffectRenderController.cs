@@ -23,12 +23,14 @@ public partial class Game1
         {
             var forceSpecialEnemyHealthBar = _game.ShouldForceLastToDieSpecialEnemyHealthBar(player);
             var forcePracticeCombatDummyHealthBar = _game._world.IsPracticeCombatDummy(player);
-            if ((!_game._showHealthBarEnabled && !forceSpecialEnemyHealthBar && !forcePracticeCombatDummyHealthBar)
+            var forceMapBotHealthBar = Game1.ShouldForceMapBotHealthBar(player);
+            if ((!_game._showHealthBarEnabled && !forceSpecialEnemyHealthBar && !forcePracticeCombatDummyHealthBar && !forceMapBotHealthBar)
                 || visibilityAlpha <= 0f
                 || (!ReferenceEquals(player, _game._world.LocalPlayer)
                     && player.Team != _game._world.LocalPlayer.Team
                     && !forceSpecialEnemyHealthBar
-                    && !forcePracticeCombatDummyHealthBar))
+                    && !forcePracticeCombatDummyHealthBar
+                    && !forceMapBotHealthBar))
             {
                 return;
             }
@@ -149,7 +151,7 @@ public partial class Game1
                 return;
             }
 
-            var frozenBounds = Game1.GetPlayerScreenBounds(player, renderPosition, cameraPosition);
+            var frozenBounds = _game.GetPlayerScreenBounds(player, renderPosition, cameraPosition);
             frozenBounds.Inflate(4, 6);
             _game._spriteBatch.Draw(_game._pixel, frozenBounds, new Color(118, 198, 255, 184) * visibilityAlpha);
         }

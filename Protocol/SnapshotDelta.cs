@@ -33,6 +33,9 @@ public static class SnapshotDelta
             BaselineFrame = 0,
             IsDelta = false,
             EntityCollectionCompletenessFlags = snapshot.EntityCollectionCompletenessFlags,
+            ScoreboardPlayers = snapshot.ScoreboardPlayers.Count == 0
+                ? baseline?.ScoreboardPlayers ?? Array.Empty<SnapshotPlayerState>()
+                : snapshot.ScoreboardPlayers,
             Players = MergePlayers(
                 baseline?.Players,
                 snapshot.Players,
@@ -57,6 +60,7 @@ public static class SnapshotDelta
             PlayerGibs = MergeEntities(baseline?.PlayerGibs, snapshot.PlayerGibs, snapshot.RemovedPlayerGibIds, static state => state.Id),
             JumpPads = MergeEntities(baseline?.JumpPads, snapshot.JumpPads, snapshot.RemovedJumpPadIds, static state => state.Id),
             JumpPadGibs = MergeEntities(baseline?.JumpPadGibs, snapshot.JumpPadGibs, snapshot.RemovedJumpPadGibIds, static state => state.Id),
+            HealthPacks = MergeEntities(baseline?.HealthPacks, snapshot.HealthPacks, snapshot.RemovedHealthPackIds, static state => state.Id),
             PlayerMovementStates = Array.Empty<SnapshotPlayerMovementState>(),
             PlayerStatusStates = Array.Empty<SnapshotPlayerStatusState>(),
             PlayerExtendedStatusStates = Array.Empty<SnapshotPlayerExtendedStatusState>(),
@@ -78,6 +82,7 @@ public static class SnapshotDelta
             RemovedSentryGibIds = Array.Empty<int>(),
             RemovedJumpPadGibIds = Array.Empty<int>(),
             RemovedJumpPadIds = Array.Empty<int>(),
+            RemovedHealthPackIds = Array.Empty<int>(),
         };
     }
 
@@ -87,6 +92,7 @@ public static class SnapshotDelta
         {
             BaselineFrame = 0,
             IsDelta = false,
+            ScoreboardPlayers = snapshot.ScoreboardPlayers,
             PlayerMovementStates = Array.Empty<SnapshotPlayerMovementState>(),
             PlayerStatusStates = Array.Empty<SnapshotPlayerStatusState>(),
             PlayerExtendedStatusStates = Array.Empty<SnapshotPlayerExtendedStatusState>(),
@@ -109,6 +115,7 @@ public static class SnapshotDelta
             RemovedSentryGibIds = Array.Empty<int>(),
             RemovedJumpPadGibIds = Array.Empty<int>(),
             RemovedJumpPadIds = Array.Empty<int>(),
+            RemovedHealthPackIds = Array.Empty<int>(),
         };
     }
 

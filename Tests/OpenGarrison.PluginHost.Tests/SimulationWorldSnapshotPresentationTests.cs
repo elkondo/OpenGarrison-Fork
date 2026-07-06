@@ -8,6 +8,70 @@ namespace OpenGarrison.PluginHost.Tests;
 public sealed class SimulationWorldSnapshotPresentationTests
 {
     [Fact]
+    public void SpawnClientPlayerGibsFromNetworkDeathIncludesFullGibSet()
+    {
+        var world = new SimulationWorld();
+        var player = new PlayerEntity(202, CharacterClassCatalog.GetDefinition(PlayerClass.Soldier), "Remote");
+        player.ApplyNetworkState(
+            PlayerTeam.Blue,
+            CharacterClassCatalog.GetDefinition(PlayerClass.Soldier),
+            isAlive: false,
+            x: 512f,
+            y: 384f,
+            horizontalSpeed: 0f,
+            verticalSpeed: 0f,
+            health: 0,
+            currentShells: 4,
+            kills: 0,
+            deaths: 1,
+            caps: 0,
+            points: 0f,
+            healPoints: 0,
+            activeDominationCount: 0,
+            isDominatingLocalViewer: false,
+            isDominatedByLocalViewer: false,
+            metal: 0f,
+            isGrounded: true,
+            remainingAirJumps: 0,
+            isCarryingIntel: false,
+            intelRechargeTicks: 0f,
+            isSpyCloaked: false,
+            spyCloakAlpha: 1f,
+            isSpySuperjumping: false,
+            spySuperjumpHorizontalVelocity: 0f,
+            spySuperjumpCooldownTicksRemaining: 0,
+            spyBackstabVisualTicksRemaining: 0,
+            isUbered: false,
+            isKritzCritBoosted: false,
+            isHeavyEating: false,
+            heavyEatTicksRemaining: 0,
+            isSniperScoped: false,
+            sniperChargeTicks: 0,
+            isUsingBinoculars: false,
+            binocularsFocusX: 512f,
+            binocularsFocusY: 384f,
+            facingDirectionX: 1f,
+            aimDirectionDegrees: 0f,
+            aimWorldX: 513f,
+            aimWorldY: 384f,
+            isTaunting: false,
+            tauntFrameIndex: 0f,
+            isChatBubbleVisible: false,
+            chatBubbleFrameIndex: 0,
+            chatBubbleAlpha: 0f,
+            gibDeaths: 1);
+
+        world.SpawnClientPlayerGibsFromNetworkDeath(player, 512f, 384f);
+
+        Assert.Contains(world.PlayerGibs, gib => gib.SpriteName == "GibS");
+        Assert.Contains(world.PlayerGibs, gib => gib.SpriteName == "BlueClumpS");
+        Assert.Contains(world.PlayerGibs, gib => gib.SpriteName == "HeadS");
+        Assert.Contains(world.PlayerGibs, gib => gib.SpriteName == "FeetS");
+        Assert.Contains(world.PlayerGibs, gib => gib.SpriteName == "HandS");
+        Assert.Contains(world.PendingVisualEvents, visualEvent => visualEvent.EffectName == "GibBlood");
+    }
+
+    [Fact]
     public void ApplySnapshotSpawnsRemotePlayerGibsWhenGibDeathStateAdvances()
     {
         var world = new SimulationWorld();
@@ -83,6 +147,39 @@ public sealed class SimulationWorldSnapshotPresentationTests
 
         Assert.True(world.ApplySnapshot(deathSnapshot, localPlayerSlot: 1));
         Assert.Equal(immediateGibCount, world.PlayerGibs.Count);
+    }
+
+    [Fact]
+    public void ApplySnapshotAddsOnlineKillFeedEntryAfterProtocolRoundTrip()
+    {
+        var world = new SimulationWorld();
+        var localPlayer = CreatePlayerState(1, 101, "Local", PlayerTeam.Red, PlayerClass.Scout, isAlive: true, gibDeaths: 0);
+        var remotePlayer = CreatePlayerState(2, 202, "Remote", PlayerTeam.Blue, PlayerClass.Soldier, isAlive: false, gibDeaths: 0);
+        var killFeedEntry = new SnapshotKillFeedEntry(
+            "Local",
+            (byte)PlayerTeam.Red,
+            "ScatterKL",
+            "Remote",
+            (byte)PlayerTeam.Blue,
+            EventId: 77)
+        {
+            InvolvedPlayerIds = [101, 202],
+        };
+        var snapshot = CreateSnapshot(world, frame: 109, localPlayer, remotePlayer) with
+        {
+            KillFeed = [killFeedEntry],
+        };
+        var payload = ProtocolCodec.Serialize(snapshot, ProtocolCompressionSettings.Disabled);
+
+        Assert.True(ProtocolCodec.TryDeserialize(payload, out var roundTripped));
+        var roundTrippedSnapshot = Assert.IsType<SnapshotMessage>(roundTripped);
+
+        Assert.True(world.ApplySnapshot(roundTrippedSnapshot, localPlayerSlot: 1));
+
+        var entry = Assert.Single(world.KillFeed);
+        Assert.Equal(killFeedEntry.EventId, entry.EventId);
+        Assert.Equal("Local", entry.KillerName);
+        Assert.Equal("Remote", entry.VictimName);
     }
 
     [Fact]
@@ -218,6 +315,59 @@ public sealed class SimulationWorldSnapshotPresentationTests
     }
 
     [Fact]
+    public void ApplySnapshotUsesExplicitScoreboardRosterForHiddenEnemySpy()
+    {
+        var world = new SimulationWorld();
+        var localPlayer = CreatePlayerState(1, 101, "Local", PlayerTeam.Red, PlayerClass.Scout, isAlive: true, gibDeaths: 0);
+        var remoteSpy = CreatePlayerState(2, 202, "Remote Spy", PlayerTeam.Blue, PlayerClass.Spy, isAlive: true, gibDeaths: 0) with
+        {
+            X = 64f,
+        };
+        var visibleSnapshot = CreateSnapshot(world, 122, localPlayer, remoteSpy);
+        var hiddenSnapshot = CreateSnapshot(world, 123, localPlayer) with
+        {
+            ScoreboardPlayers = [localPlayer, remoteSpy],
+            RemovedPlayerIds = [remoteSpy.Slot],
+        };
+        var visibleAgainSnapshot = CreateSnapshot(world, 124, localPlayer, remoteSpy);
+
+        Assert.True(world.ApplySnapshot(visibleSnapshot, localPlayerSlot: 1));
+        Assert.Single(world.RemoteSnapshotPlayers);
+        Assert.Single(world.RemoteSnapshotScoreboardPlayers);
+
+        Assert.True(world.ApplySnapshot(hiddenSnapshot, localPlayerSlot: 1));
+
+        Assert.Empty(world.RemoteSnapshotPlayers);
+        var hiddenScoreboardPlayer = Assert.Single(world.RemoteSnapshotScoreboardPlayers);
+        Assert.Equal(remoteSpy.PlayerId, hiddenScoreboardPlayer.Id);
+        Assert.True(world.TryGetPlayerNetworkSlot(hiddenScoreboardPlayer, out var hiddenSlot));
+        Assert.Equal(remoteSpy.Slot, hiddenSlot);
+
+        Assert.True(world.ApplySnapshot(visibleAgainSnapshot, localPlayerSlot: 1));
+
+        var visibleScoreboardPlayer = Assert.Single(world.RemoteSnapshotScoreboardPlayers);
+        Assert.Equal(remoteSpy.PlayerId, visibleScoreboardPlayer.Id);
+        Assert.True(world.TryGetPlayerNetworkSlot(visibleScoreboardPlayer, out var visibleSlot));
+        Assert.Equal(remoteSpy.Slot, visibleSlot);
+    }
+
+    [Fact]
+    public void ApplySnapshotUpdatesCapLimitFromServerRules()
+    {
+        var world = new SimulationWorld();
+        var localPlayer = CreatePlayerState(1, 101, "Local", PlayerTeam.Red, PlayerClass.Scout, isAlive: true, gibDeaths: 0);
+        var snapshot = CreateSnapshot(world, 127, localPlayer) with
+        {
+            CapLimit = 9,
+        };
+
+        Assert.Equal(5, world.MatchRules.CapLimit);
+        Assert.True(world.ApplySnapshot(snapshot, localPlayerSlot: 1));
+
+        Assert.Equal(9, world.MatchRules.CapLimit);
+    }
+
+    [Fact]
     public void ApplySnapshotRetainsMissingBackstabAnimatingEnemySpyForScoreboard()
     {
         var world = new SimulationWorld();
@@ -314,6 +464,100 @@ public sealed class SimulationWorldSnapshotPresentationTests
         Assert.NotNull(deathCam);
         Assert.Equal(killer.X, deathCam!.FocusX);
         Assert.Equal(killer.Y, deathCam.FocusY);
+    }
+
+    [Fact]
+    public void NetworkPlayerDeathCamFreezesKillerHealth()
+    {
+        var world = new SimulationWorld();
+        world.CompleteLocalPlayerJoin(PlayerClass.Scout);
+        Assert.True(world.TryPrepareNetworkPlayerJoin(2));
+        Assert.True(world.TrySetNetworkPlayerTeam(2, PlayerTeam.Blue));
+        Assert.True(world.TryApplyNetworkPlayerClassSelection(2, PlayerClass.Soldier));
+        Assert.True(world.TryGetNetworkPlayer(2, out var killer));
+        killer.ForceSetHealth(137);
+
+        var killMethod = typeof(SimulationWorld).GetMethod("KillPlayer", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(killMethod);
+        _ = killMethod!.Invoke(
+            world,
+            [
+                world.LocalPlayer,
+                false,
+                killer,
+                "RocketKL",
+                DeadBodyAnimationKind.Default,
+                null,
+                null,
+                null,
+                true,
+                true,
+                false,
+                true,
+            ]);
+
+        killer.ForceSetHealth(12);
+
+        var deathCam = world.GetNetworkPlayerDeathCam(SimulationWorld.LocalPlayerSlot);
+        Assert.NotNull(deathCam);
+        Assert.Equal(137, deathCam!.Health);
+        Assert.Equal(killer.MaxHealth, deathCam.MaxHealth);
+    }
+
+    [Fact]
+    public void NetworkPlayerDeathCamFreezesTrackedKillerFocusAfterDelay()
+    {
+        var world = new SimulationWorld();
+        world.CompleteLocalPlayerJoin(PlayerClass.Scout);
+        Assert.True(world.TryPrepareNetworkPlayerJoin(2));
+        Assert.True(world.TrySetNetworkPlayerTeam(2, PlayerTeam.Blue));
+        Assert.True(world.TryApplyNetworkPlayerClassSelection(2, PlayerClass.Soldier));
+        Assert.True(world.TryGetNetworkPlayer(2, out var killer));
+        killer.TeleportTo(128f, 96f);
+
+        var killMethod = typeof(SimulationWorld).GetMethod("KillPlayer", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(killMethod);
+        _ = killMethod!.Invoke(
+            world,
+            [
+                world.LocalPlayer,
+                false,
+                killer,
+                "RocketKL",
+                DeadBodyAnimationKind.Default,
+                null,
+                null,
+                null,
+                true,
+                true,
+                false,
+                true,
+            ]);
+
+        killer.TeleportTo(224f, 128f);
+        for (var tick = 0; tick < 59; tick += 1)
+        {
+            world.AdvanceOneTick();
+        }
+
+        var trackingDeathCam = world.GetNetworkPlayerDeathCam(SimulationWorld.LocalPlayerSlot);
+        Assert.NotNull(trackingDeathCam);
+        Assert.Equal(killer.X, trackingDeathCam!.FocusX);
+        Assert.Equal(killer.Y, trackingDeathCam.FocusY);
+
+        world.AdvanceOneTick();
+        var frozenDeathCam = world.GetNetworkPlayerDeathCam(SimulationWorld.LocalPlayerSlot);
+        Assert.NotNull(frozenDeathCam);
+        var frozenFocusX = frozenDeathCam!.FocusX;
+        var frozenFocusY = frozenDeathCam.FocusY;
+
+        killer.TeleportTo(480f, 256f);
+        world.AdvanceOneTick();
+
+        var movedKillerDeathCam = world.GetNetworkPlayerDeathCam(SimulationWorld.LocalPlayerSlot);
+        Assert.NotNull(movedKillerDeathCam);
+        Assert.Equal(frozenFocusX, movedKillerDeathCam!.FocusX);
+        Assert.Equal(frozenFocusY, movedKillerDeathCam.FocusY);
     }
 
     private static SnapshotMessage CreateSnapshot(

@@ -2,6 +2,7 @@
 
 using Microsoft.Xna.Framework.Audio;
 using System;
+using System.Collections.Generic;
 using OpenGarrison.Core;
 using OpenGarrison.Protocol;
 
@@ -131,6 +132,8 @@ public partial class Game1
             ReplayPendingBrowserSoundEvents();
             _game.AdvanceRecentGibSoundEvents();
             _game.AdvanceRecentProjectileSoundEvents();
+            _game.AdvanceLowPriorityWorldSoundThrottle();
+            _game.AdvanceLocalWeaponSoundFocus();
 
             if (_game._pendingNetworkSoundEvents.Count > 1)
             {
@@ -163,7 +166,20 @@ public partial class Game1
                     _game._pendingNetworkSoundEvents.Count - retainedNetworkSoundCount);
             }
 
-            foreach (var soundEvent in _game._world.DrainPendingSoundEvents())
+            var worldSoundEvents = _game._world.DrainPendingSoundEvents();
+            if (worldSoundEvents.Count > 1)
+            {
+                var sortedWorldSoundEvents = new List<WorldSoundEvent>(worldSoundEvents);
+                sortedWorldSoundEvents.Sort((left, right) => GetSoundEventPlaybackPriority(left).CompareTo(GetSoundEventPlaybackPriority(right)));
+                foreach (var soundEvent in sortedWorldSoundEvents)
+                {
+                    ProcessPendingSoundEvent(soundEvent);
+                }
+
+                return;
+            }
+
+            foreach (var soundEvent in worldSoundEvents)
             {
                 ProcessPendingSoundEvent(soundEvent);
             }
@@ -234,11 +250,18 @@ public partial class Game1
                 return true;
             }
 
+            if (_game.ShouldThrottleLowPriorityWorldSound(resolvedSoundName, soundEvent))
+            {
+                return true;
+            }
+
             if (!TryPlayResolvedWorldSound(resolvedSoundName, soundEvent, allowBrowserDefer: OperatingSystem.IsBrowser()))
             {
                 return true;
             }
 
+            _game.RememberPlayedLowPriorityWorldSound(resolvedSoundName, soundEvent);
+            _game.TriggerLocalConfirmedWeaponFireFeedback(resolvedSoundName, soundEvent);
             _game.RememberPlayedProjectileSound(resolvedSoundName, soundEvent);
             if (isExplosionSound)
             {

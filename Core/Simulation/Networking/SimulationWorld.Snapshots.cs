@@ -337,11 +337,105 @@ public sealed partial class SimulationWorld
             snapshot.Grenades,
             snapshot.RemovedGrenadeIds,
             IsSnapshotEntityCollectionComplete(snapshot, SnapshotEntityCollectionCompletenessFlags.Grenades));
+        ApplySnapshotHealthPacks(snapshot.HealthPacks, snapshot.RemovedHealthPackIds);
         ApplySnapshotGibSpawnEvents(snapshot.GibSpawnEvents);
         // Blood drops are now generated locally on the client - not synced from server
         ApplySnapshotDeadBodies(snapshot.DeadBodies);
         ApplySnapshotSentryGibs(snapshot.SentryGibs);
         ApplySnapshotJumpPadGibs(snapshot.JumpPadGibs);
+    }
+
+    private void ApplySnapshotHealthPacks(
+        IReadOnlyList<SnapshotHealthPackState> healthPacks,
+        IReadOnlyList<int> removedHealthPackIds)
+    {
+        _snapshotSeenEntityIds.Clear();
+        for (var index = 0; index < healthPacks.Count; index += 1)
+        {
+            _snapshotSeenEntityIds.Add(healthPacks[index].Id);
+        }
+
+        for (var index = _healthPacks.Count - 1; index >= 0; index -= 1)
+        {
+            var healthPack = _healthPacks[index];
+            var snapshotId = healthPack.NetworkSnapshotId;
+            if (ContainsEntityId(removedHealthPackIds, snapshotId)
+                || !_snapshotSeenEntityIds.Contains(snapshotId)
+                || SnapshotMarksHealthPackInactive(healthPacks, snapshotId))
+            {
+                _entities.Remove(healthPack.Id);
+                _healthPacks.RemoveAt(index);
+            }
+        }
+
+        for (var index = 0; index < healthPacks.Count; index += 1)
+        {
+            var state = healthPacks[index];
+            if (!state.Active)
+            {
+                continue;
+            }
+
+            ReserveEntityId(state.Id);
+            var healthPack = FindHealthPackBySnapshotId(state.Id);
+            if (healthPack is null
+                || healthPack.Id != state.Id
+                || healthPack.Size != (HealthPackSize)state.Size
+                || healthPack.SourceSpawnIndex != state.SourceSpawnIndex)
+            {
+                if (healthPack is not null)
+                {
+                    _entities.Remove(healthPack.Id);
+                    _healthPacks.Remove(healthPack);
+                }
+
+                healthPack = new HealthPackEntity(
+                    state.Id,
+                    state.X,
+                    state.Y,
+                    (HealthPackSize)state.Size,
+                    state.VelocityX,
+                    state.VelocityY,
+                    state.SourceSpawnIndex);
+                _healthPacks.Add(healthPack);
+                _entities[healthPack.Id] = healthPack;
+            }
+
+            healthPack.ApplyNetworkState(
+                state.X,
+                state.Y,
+                state.VelocityX,
+                state.VelocityY,
+                state.TicksRemaining);
+        }
+    }
+
+    private HealthPackEntity? FindHealthPackBySnapshotId(int snapshotId)
+    {
+        for (var index = 0; index < _healthPacks.Count; index += 1)
+        {
+            if (_healthPacks[index].NetworkSnapshotId == snapshotId)
+            {
+                return _healthPacks[index];
+            }
+        }
+
+        return null;
+    }
+
+    private static bool SnapshotMarksHealthPackInactive(
+        IReadOnlyList<SnapshotHealthPackState> healthPacks,
+        int snapshotId)
+    {
+        for (var index = 0; index < healthPacks.Count; index += 1)
+        {
+            if (healthPacks[index].Id == snapshotId)
+            {
+                return !healthPacks[index].Active;
+            }
+        }
+
+        return false;
     }
 
     private void ApplySnapshotJumpPads(IReadOnlyList<SnapshotJumpPadState> jumpPads)
@@ -1166,7 +1260,6 @@ public sealed partial class SimulationWorld
     {
         _snapshotSeenRemotePlayerSlots.Clear();
         _remoteSnapshotPlayers.Clear();
-        _remoteSnapshotScoreboardPlayers.Clear();
         _remoteSnapshotAwaitingJoinSlots.Clear();
         _remoteSnapshotAwaitingJoinPlayerIds.Clear();
         foreach (var snapshotPlayer in snapshotPlayers)
@@ -1244,12 +1337,50 @@ public sealed partial class SimulationWorld
             }
         }
 
-        for (var slot = LocalPlayerSlot; slot <= MaxPlayableNetworkPlayers; slot += 1)
+    }
+
+    private void SyncRemoteSnapshotScoreboardPlayers(IEnumerable<SnapshotPlayerState> snapshotPlayers)
+    {
+        _snapshotSeenRemotePlayerSlots.Clear();
+        _remoteSnapshotScoreboardPlayers.Clear();
+        foreach (var snapshotPlayer in snapshotPlayers)
         {
-            if (_remoteSnapshotPlayersBySlot.TryGetValue((byte)slot, out var player))
+            var appliedSnapshotPlayer = NormalizeAwaitingJoinSnapshotPlayerState(snapshotPlayer);
+            _snapshotSeenRemotePlayerSlots.Add(appliedSnapshotPlayer.Slot);
+            PlayerEntity player;
+            if (_remoteSnapshotPlayersBySlot.TryGetValue(appliedSnapshotPlayer.Slot, out var visiblePlayer))
             {
-                _remoteSnapshotScoreboardPlayers.Add(player);
+                player = visiblePlayer;
             }
+            else if (!_remoteSnapshotScoreboardPlayersBySlot.TryGetValue(appliedSnapshotPlayer.Slot, out player!))
+            {
+                ReserveEntityId(appliedSnapshotPlayer.PlayerId);
+                var gameplayClassId = _snapshotStringCache.Resolve(appliedSnapshotPlayer.GameplayClassCacheId, appliedSnapshotPlayer.GameplayClassId);
+                player = new PlayerEntity(
+                    appliedSnapshotPlayer.PlayerId,
+                    ResolveSnapshotClassDefinition(appliedSnapshotPlayer, gameplayClassId),
+                    appliedSnapshotPlayer.Name);
+                _remoteSnapshotScoreboardPlayersBySlot[appliedSnapshotPlayer.Slot] = player;
+            }
+
+            ApplySnapshotPlayer(player, appliedSnapshotPlayer);
+            _remoteSnapshotScoreboardPlayers.Add(player);
+        }
+
+        _snapshotStaleRemotePlayerSlots.Clear();
+        foreach (var entry in _remoteSnapshotScoreboardPlayersBySlot)
+        {
+            if (!_snapshotSeenRemotePlayerSlots.Contains(entry.Key)
+                || _remoteSnapshotPlayersBySlot.TryGetValue(entry.Key, out var visiblePlayer)
+                && ReferenceEquals(entry.Value, visiblePlayer))
+            {
+                _snapshotStaleRemotePlayerSlots.Add(entry.Key);
+            }
+        }
+
+        for (var index = 0; index < _snapshotStaleRemotePlayerSlots.Count; index += 1)
+        {
+            _remoteSnapshotScoreboardPlayersBySlot.Remove(_snapshotStaleRemotePlayerSlots[index]);
         }
     }
 

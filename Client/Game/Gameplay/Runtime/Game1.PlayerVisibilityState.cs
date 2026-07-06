@@ -92,7 +92,7 @@ public partial class Game1
     {
         if (backstabRevealAlpha > 0f)
         {
-            return Math.Max(cloakAlpha, backstabRevealAlpha);
+            return Math.Clamp(Math.Max(cloakAlpha, backstabRevealAlpha) * bodyVisibilityScale, 0f, 1f);
         }
 
         return cloakAlpha * bodyVisibilityScale;
@@ -118,7 +118,7 @@ public partial class Game1
         for (var index = 0; index < _world.RemoteSnapshotPlayers.Count; index += 1)
         {
             var player = _world.RemoteSnapshotPlayers[index];
-            if (player.ClassId != PlayerClass.Spy || player.Team == _world.LocalPlayer.Team)
+            if (!player.IsAlive || player.ClassId != PlayerClass.Spy || player.Team == _world.LocalPlayer.Team)
             {
                 continue;
             }

@@ -105,6 +105,21 @@ internal static class SnapshotContributionPlanner
             static (builder, id) => builder.RemovedJumpPadIds.Add(id));
         AddEntityDelta(
             contributions,
+            fullSnapshot.HealthPacks,
+            baseline?.HealthPacks,
+            priority: 1190,
+            estimateUpdatedBytes: static state => 35,
+            estimatedRemovedBytes: 4,
+            focus,
+            static state => state.Id,
+            static state => state.X,
+            static state => state.Y,
+            static (builder, state) => builder.HealthPacks.Add(state),
+            static (builder, id) => builder.RemovedHealthPackIds.Add(id),
+            updatedStateKind: SnapshotDeltaBudgeter.ContributionKind.EntityStateUpdate,
+            addedStateKind: SnapshotDeltaBudgeter.ContributionKind.EntityFirstAppearance);
+        AddEntityDelta(
+            contributions,
             fullSnapshot.Rockets,
             baseline?.Rockets,
             priority: 1120,
@@ -417,7 +432,8 @@ internal static class SnapshotContributionPlanner
             fullSnapshot.KillFeed,
             priority: 1180,
             estimateBytes: EstimateKillFeedBytes,
-            static (builder, entry) => builder.KillFeed.Add(entry));
+            static (builder, entry) => builder.KillFeed.Add(entry),
+            kind: SnapshotDeltaBudgeter.ContributionKind.KillFeed);
 
         return contributions;
     }
@@ -1082,7 +1098,9 @@ internal static class SnapshotContributionPlanner
             or GameplayAbilityReplicatedState.CivvieUmbrellaActiveKey
             or GameplayAbilityReplicatedState.CivvieUmbrellaDisabledKey
             or GameplayAbilityReplicatedState.CivviePogoActiveKey
-            or GameplayAbilityReplicatedState.CivviePogoCrunchTicksKey;
+            or GameplayAbilityReplicatedState.CivviePogoCrunchTicksKey
+            or GameplayAbilityReplicatedState.CivviePogoTrickTicksKey
+            or GameplayAbilityReplicatedState.CivviePogoTrickDurationTicksKey;
     }
 
     private static bool ReplicatedStateKeysEqual(SnapshotReplicatedStateEntry left, SnapshotReplicatedStateEntry right)
@@ -1496,7 +1514,8 @@ internal static class SnapshotContributionPlanner
         IReadOnlyList<T> states,
         int priority,
         Func<T, int> estimateBytes,
-        Action<SnapshotDeltaBudgeter.Builder, T> addState)
+        Action<SnapshotDeltaBudgeter.Builder, T> addState,
+        SnapshotDeltaBudgeter.ContributionKind kind = SnapshotDeltaBudgeter.ContributionKind.Optional)
     {
         for (var index = states.Count - 1; index >= 0; index -= 1)
         {
@@ -1505,7 +1524,8 @@ internal static class SnapshotContributionPlanner
                 priority - ((states.Count - 1) - index),
                 0f,
                 estimateBytes(state),
-                builder => addState(builder, state)));
+                builder => addState(builder, state),
+                kind));
         }
     }
 

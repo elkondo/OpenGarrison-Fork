@@ -22,10 +22,18 @@ public partial class Game1
     private const int RecentProjectileSoundEchoLimit = 32;
     private const float RecentProjectileExplosionSoundEchoDistanceSquared = 64f * 64f;
     private const float RecentProjectileFireSoundEchoDistanceSquared = 24f * 24f;
-    private const float LocalWeaponSoundVolumeMultiplier = 1.85f;
+    private const int LowPriorityWorldSoundThrottleLifetimeTicks = 8;
+    private const int LowPriorityWorldSoundThrottleLimit = 24;
+    private const int LowPriorityWorldSoundFrameLimit = 4;
+    private const float JumpSoundThrottleDistanceSquared = 96f * 96f;
+    private const float LocalWeaponSoundVolumeMultiplier = 2.1f;
     private const float LocalWeaponSoundMinimumVolume = 0.9f;
-    private const float RemoteWeaponSoundVolumeMultiplier = 0.72f;
+    private const float RemoteWeaponSoundVolumeMultiplier = 0.52f;
     private const float LocalWeaponSoundPanMultiplier = 0.35f;
+    private const float LocalWeaponSoundFocusDurationSeconds = 0.16f;
+    private const float FocusedRemoteWeaponSoundVolumeMultiplier = 0.58f;
+    private const float FocusedOtherWorldSoundVolumeMultiplier = 0.76f;
+    private const float RemoteHealingCabinetSoundVolumeMultiplier = 0.62f;
 
     private sealed class PendingBrowserSoundEvent
     {
@@ -87,6 +95,25 @@ public partial class Game1
         public int TicksRemaining { get; set; }
     }
 
+    private sealed class RecentLowPriorityWorldSoundEvent
+    {
+        public RecentLowPriorityWorldSoundEvent(string soundName, float x, float y, int ticksRemaining)
+        {
+            SoundName = soundName;
+            X = x;
+            Y = y;
+            TicksRemaining = ticksRemaining;
+        }
+
+        public string SoundName { get; }
+
+        public float X { get; }
+
+        public float Y { get; }
+
+        public int TicksRemaining { get; set; }
+    }
+
     private SoundEffect? _menuMusic;
     private SoundEffectInstance? _menuMusicInstance;
     private SoundEffect? _lastToDieMenuMusic;
@@ -125,6 +152,9 @@ public partial class Game1
     private readonly List<WorldSoundEvent> _pendingNetworkSoundEvents = new();
     private readonly List<RecentGibSoundEvent> _recentGibSoundEvents = new();
     private readonly List<RecentProjectileSoundEvent> _recentProjectileSoundEvents = new();
+    private readonly List<RecentLowPriorityWorldSoundEvent> _recentLowPriorityWorldSoundEvents = new();
+    private int _lowPriorityWorldSoundsPlayedThisFrame;
+    private float _localWeaponSoundFocusRemainingSeconds;
     private readonly List<PlayedExplosionSoundThisFrame> _playedExplosionSoundsThisFrame = new();
     private string _lastOneShotSoundFailureMessage = string.Empty;
 
@@ -242,6 +272,7 @@ public partial class Game1
 
     private void StopIngameMusic()
     {
+        StopGameplaySoundMusicOverride();
         _gameplayAudioMusicController.StopIngameMusic();
         ResetDynamicMusicPlayback();
     }
@@ -469,6 +500,114 @@ public partial class Game1
         }
     }
 
+    private void AdvanceLowPriorityWorldSoundThrottle()
+    {
+        _lowPriorityWorldSoundsPlayedThisFrame = 0;
+        for (var index = _recentLowPriorityWorldSoundEvents.Count - 1; index >= 0; index -= 1)
+        {
+            _recentLowPriorityWorldSoundEvents[index].TicksRemaining -= 1;
+            if (_recentLowPriorityWorldSoundEvents[index].TicksRemaining <= 0)
+            {
+                _recentLowPriorityWorldSoundEvents.RemoveAt(index);
+            }
+        }
+    }
+
+    private void AdvanceLocalWeaponSoundFocus()
+    {
+        if (_localWeaponSoundFocusRemainingSeconds <= 0f)
+        {
+            _localWeaponSoundFocusRemainingSeconds = 0f;
+            return;
+        }
+
+        _localWeaponSoundFocusRemainingSeconds = Math.Max(
+            0f,
+            _localWeaponSoundFocusRemainingSeconds - Math.Max(0f, _clientUpdateElapsedSeconds));
+    }
+
+    private void TriggerLocalWeaponSoundFocus()
+    {
+        _localWeaponSoundFocusRemainingSeconds = Math.Max(
+            _localWeaponSoundFocusRemainingSeconds,
+            LocalWeaponSoundFocusDurationSeconds);
+    }
+
+    private void TriggerLocalConfirmedWeaponFireFeedback(string soundName, WorldSoundEvent soundEvent)
+    {
+        if (!IsLocalPlayerSoundSource(soundEvent.SourcePlayerId) || !IsWeaponFireSoundName(soundName))
+        {
+            return;
+        }
+
+        TriggerLocalWeaponSoundFocus();
+        TriggerLocalWeaponFireHudRumble(GetWeaponSoundHudRumbleIntensity(soundName));
+    }
+
+    private static bool IsLowPriorityWorldSoundName(string soundName)
+    {
+        return string.Equals(soundName, "JumpSnd", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static float GetLowPriorityWorldSoundThrottleDistanceSquared(string soundName)
+    {
+        return string.Equals(soundName, "JumpSnd", StringComparison.OrdinalIgnoreCase)
+            ? JumpSoundThrottleDistanceSquared
+            : 0f;
+    }
+
+    private bool ShouldThrottleLowPriorityWorldSound(string resolvedSoundName, WorldSoundEvent soundEvent)
+    {
+        if (!IsLowPriorityWorldSoundName(resolvedSoundName) || IsLocalPlayerSoundSource(soundEvent.SourcePlayerId))
+        {
+            return false;
+        }
+
+        if (_lowPriorityWorldSoundsPlayedThisFrame >= LowPriorityWorldSoundFrameLimit)
+        {
+            return true;
+        }
+
+        var maxDistanceSquared = GetLowPriorityWorldSoundThrottleDistanceSquared(resolvedSoundName);
+        for (var index = 0; index < _recentLowPriorityWorldSoundEvents.Count; index += 1)
+        {
+            var recent = _recentLowPriorityWorldSoundEvents[index];
+            if (!string.Equals(recent.SoundName, resolvedSoundName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var deltaX = soundEvent.X - recent.X;
+            var deltaY = soundEvent.Y - recent.Y;
+            if ((deltaX * deltaX) + (deltaY * deltaY) <= maxDistanceSquared)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void RememberPlayedLowPriorityWorldSound(string resolvedSoundName, WorldSoundEvent soundEvent)
+    {
+        if (!IsLowPriorityWorldSoundName(resolvedSoundName) || IsLocalPlayerSoundSource(soundEvent.SourcePlayerId))
+        {
+            return;
+        }
+
+        _lowPriorityWorldSoundsPlayedThisFrame += 1;
+        while (_recentLowPriorityWorldSoundEvents.Count >= LowPriorityWorldSoundThrottleLimit)
+        {
+            _recentLowPriorityWorldSoundEvents.RemoveAt(0);
+        }
+
+        _recentLowPriorityWorldSoundEvents.Add(new RecentLowPriorityWorldSoundEvent(
+            resolvedSoundName,
+            soundEvent.X,
+            soundEvent.Y,
+            LowPriorityWorldSoundThrottleLifetimeTicks));
+    }
+
     private bool ShouldSuppressPredictedProjectileSoundEcho(string resolvedSoundName, WorldSoundEvent soundEvent)
     {
         if (!IsProjectileSoundEchoCandidate(resolvedSoundName))
@@ -524,6 +663,12 @@ public partial class Game1
         _recentProjectileSoundEvents.Clear();
     }
 
+    private void ResetLowPriorityWorldSoundThrottle()
+    {
+        _recentLowPriorityWorldSoundEvents.Clear();
+        _lowPriorityWorldSoundsPlayedThisFrame = 0;
+    }
+
     private bool TryPlaySound(SoundEffect? sound, float volume, float pitch, float pan)
     {
         if (!_audioAvailable || sound is null)
@@ -568,6 +713,7 @@ public partial class Game1
         StopIngameMusic();
         StopLastToDieIngameMusic();
         StopLastToDieGameOverSound();
+        StopGameplaySoundMusicOverride();
         DisposeDynamicMusic();
         _menuMusicInstance?.Dispose();
         _menuMusicInstance = null;
@@ -647,10 +793,12 @@ public partial class Game1
         SetSoundEffectInstanceVolume(_lastToDieMenuMusicInstance, GetNonLinearVolumeScale(_menuMusicVolumePercent) * 0.82f);
         SetSoundEffectInstanceVolume(_faucetMusicInstance, GetNonLinearVolumeScale(_menuMusicVolumePercent) * 0.8f);
         var ingameMusicVolume = GetNonLinearVolumeScale(_ingameMusicVolumePercent);
-        SetSoundEffectInstanceVolume(_ingameMusicInstance, ingameMusicVolume * 0.8f * _dynamicNormalMusicFade);
-        SetSoundEffectInstanceVolume(_lastToDieIngameMusicInstance, ingameMusicVolume * 0.82f);
+        var gameplaySoundUnderlyingScale = GetGameplaySoundUnderlyingMusicVolumeScale();
+        SetSoundEffectInstanceVolume(_ingameMusicInstance, ingameMusicVolume * 0.8f * _dynamicNormalMusicFade * gameplaySoundUnderlyingScale);
+        SetSoundEffectInstanceVolume(_lastToDieIngameMusicInstance, ingameMusicVolume * 0.82f * gameplaySoundUnderlyingScale);
+        SetSoundEffectInstanceVolume(_gameplaySoundMusicOverrideInstance, GetGameplaySoundMusicOverrideVolume());
         SetSoundEffectInstanceVolume(_lastToDieGameOverSoundInstance, ingameMusicVolume * 0.85f);
-        UpdateDynamicMusicInstanceVolumes(ingameMusicVolume);
+        UpdateDynamicMusicInstanceVolumes(ingameMusicVolume * gameplaySoundUnderlyingScale);
     }
 
     private static float GetNonLinearVolumeScale(int percent)
@@ -691,9 +839,9 @@ public partial class Game1
 
     private Vector2 GetWorldSoundListenerPosition()
     {
-        if (_networkClient.IsReplayConnection || _networkClient.IsSpectator)
+        if (_hasGameplayCameraTopLeft)
         {
-            return GetLocalViewPosition();
+            return _gameplayCameraTopLeft + new Vector2(ViewportWidth * 0.5f, ViewportHeight * 0.5f);
         }
 
         return new Vector2(_world.LocalPlayer.X, _world.LocalPlayer.Y);
@@ -709,7 +857,14 @@ public partial class Game1
         var (volume, pan) = GetWorldSoundMix(soundEvent.X, soundEvent.Y);
         if (!IsWeaponFireSoundName(soundEvent.SoundName))
         {
-            return (volume, pan);
+            if (IsHealingCabinetSoundName(soundEvent.SoundName) && !IsLocalPlayerSoundSource(soundEvent.SourcePlayerId))
+            {
+                volume *= RemoteHealingCabinetSoundVolumeMultiplier;
+            }
+
+            return _localWeaponSoundFocusRemainingSeconds > 0f && !IsLocalPlayerSoundSource(soundEvent.SourcePlayerId)
+                ? (volume * FocusedOtherWorldSoundVolumeMultiplier, pan)
+                : (volume, pan);
         }
 
         if (IsLocalPlayerSoundSource(soundEvent.SourcePlayerId))
@@ -719,7 +874,13 @@ public partial class Game1
                 Math.Clamp(pan * LocalWeaponSoundPanMultiplier, -1f, 1f));
         }
 
-        return (volume * RemoteWeaponSoundVolumeMultiplier, pan);
+        var remoteMultiplier = RemoteWeaponSoundVolumeMultiplier;
+        if (_localWeaponSoundFocusRemainingSeconds > 0f)
+        {
+            remoteMultiplier *= FocusedRemoteWeaponSoundVolumeMultiplier;
+        }
+
+        return (volume * remoteMultiplier, pan);
     }
 
     private (float Volume, float Pan) GetLoopedWorldSoundMix(string soundName, float worldX, float worldY, bool isLocalSource)
@@ -745,6 +906,11 @@ public partial class Game1
         return sourcePlayerId >= 0 && sourcePlayerId == GetResolvedLocalPlayerId();
     }
 
+    private static bool IsHealingCabinetSoundName(string soundName)
+    {
+        return string.Equals(soundName, "CbntHealSnd", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsWeaponFireSoundName(string soundName)
     {
         return string.Equals(soundName, "ShotgunSnd", StringComparison.OrdinalIgnoreCase)
@@ -761,6 +927,47 @@ public partial class Game1
             || string.Equals(soundName, "BladeSnd", StringComparison.OrdinalIgnoreCase)
             || string.Equals(soundName, "EyelanderSnd", StringComparison.OrdinalIgnoreCase)
             || string.Equals(soundName, "KnifeSnd", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static float GetWeaponSoundHudRumbleIntensity(string soundName)
+    {
+        if (string.Equals(soundName, "RocketSnd", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(soundName, "DirecthitSnd", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(soundName, "MinegunSnd", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0.9f;
+        }
+
+        if (string.Equals(soundName, "RifleSnd", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(soundName, "SniperSnd", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0.85f;
+        }
+
+        if (string.Equals(soundName, "RevolverSnd", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0.65f;
+        }
+
+        if (string.Equals(soundName, "BladeSnd", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(soundName, "EyelanderSnd", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(soundName, "KnifeSnd", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0.45f;
+        }
+
+        if (string.Equals(soundName, "ChaingunSnd", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(soundName, "FlamethrowerSnd", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0.35f;
+        }
+
+        if (string.Equals(soundName, "MedigunSnd", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0.25f;
+        }
+
+        return 0.55f;
     }
 
     private void StopLocalRapidFireWeaponAudio()

@@ -41,6 +41,7 @@ public static partial class ProtocolCodec
         WriteIntelState(writer, snapshot.RedIntel);
         WriteIntelState(writer, snapshot.BlueIntel);
         WriteSnapshotPlayers(writer, snapshot.Players);
+        WriteSnapshotPlayers(writer, snapshot.ScoreboardPlayers);
         WriteSnapshotPlayerMovementStates(writer, snapshot.PlayerMovementStates);
         WriteSnapshotPlayerStatusStates(writer, snapshot.PlayerStatusStates);
         WriteSnapshotPlayerExtendedStatusStates(writer, snapshot.PlayerExtendedStatusStates);
@@ -81,6 +82,8 @@ public static partial class ProtocolCodec
         WriteEntityIdList(writer, snapshot.RemovedJumpPadIds);
         WriteJumpPadGibStates(writer, snapshot.JumpPadGibs);
         WriteEntityIdList(writer, snapshot.RemovedJumpPadGibIds);
+        WriteHealthPackStates(writer, snapshot.HealthPacks);
+        WriteEntityIdList(writer, snapshot.RemovedHealthPackIds);
         writer.Write(snapshot.ControlPointSetupTicksRemaining);
         writer.Write(snapshot.KothUnlockTicksRemaining);
         writer.Write(snapshot.KothRedTimerTicksRemaining);
@@ -94,6 +97,7 @@ public static partial class ProtocolCodec
         writer.Write(snapshot.ArenaBlueConsecutiveWins);
         writer.Write(snapshot.CompetitiveReadyUpPhase);
         writer.Write(snapshot.CompetitiveReadyUpTicksRemaining);
+        writer.Write(snapshot.CapLimit);
         WriteControlPointStates(writer, snapshot.ControlPoints);
         WriteGeneratorStates(writer, snapshot.Generators);
         WriteDeathCamState(writer, snapshot.LocalDeathCam);
@@ -130,6 +134,7 @@ public static partial class ProtocolCodec
         var redIntel = ReadIntelState(reader);
         var blueIntel = ReadIntelState(reader);
         var players = ReadSnapshotPlayers(reader);
+        var scoreboardPlayers = ReadSnapshotPlayers(reader);
         var playerMovementStates = ReadSnapshotPlayerMovementStates(reader);
         var playerStatusStates = ReadSnapshotPlayerStatusStates(reader);
         var playerExtendedStatusStates = ReadSnapshotPlayerExtendedStatusStates(reader);
@@ -170,6 +175,8 @@ public static partial class ProtocolCodec
         var removedJumpPadIds = ReadEntityIdList(reader);
         var jumpPadGibs = ReadJumpPadGibStates(reader);
         var removedJumpPadGibIds = ReadEntityIdList(reader);
+        var healthPacks = ReadHealthPackStates(reader);
+        var removedHealthPackIds = ReadEntityIdList(reader);
         var controlPointSetupTicksRemaining = reader.ReadInt32();
         var kothUnlockTicksRemaining = reader.ReadInt32();
         var kothRedTimerTicksRemaining = reader.ReadInt32();
@@ -183,6 +190,7 @@ public static partial class ProtocolCodec
         var arenaBlueConsecutiveWins = reader.ReadInt32();
         var competitiveReadyUpPhase = reader.ReadByte();
         var competitiveReadyUpTicksRemaining = reader.ReadInt32();
+        var capLimit = reader.ReadInt32();
         var controlPoints = ReadControlPointStates(reader);
         var generators = ReadGeneratorStates(reader);
         var deathCam = ReadDeathCamState(reader);
@@ -248,9 +256,11 @@ public static partial class ProtocolCodec
             ArenaBlueConsecutiveWins = arenaBlueConsecutiveWins,
             CompetitiveReadyUpPhase = competitiveReadyUpPhase,
             CompetitiveReadyUpTicksRemaining = competitiveReadyUpTicksRemaining,
+            CapLimit = capLimit,
             BaselineFrame = baselineFrame,
             IsDelta = isDelta,
             EntityCollectionCompletenessFlags = entityCollectionCompletenessFlags,
+            ScoreboardPlayers = scoreboardPlayers,
             PlayerMovementStates = playerMovementStates,
             PlayerStatusStates = playerStatusStates,
             PlayerExtendedStatusStates = playerExtendedStatusStates,
@@ -278,6 +288,8 @@ public static partial class ProtocolCodec
             RemovedJumpPadIds = removedJumpPadIds,
             JumpPadGibs = jumpPadGibs,
             RemovedJumpPadGibIds = removedJumpPadGibIds,
+            HealthPacks = healthPacks,
+            RemovedHealthPackIds = removedHealthPackIds,
         };
     }
 

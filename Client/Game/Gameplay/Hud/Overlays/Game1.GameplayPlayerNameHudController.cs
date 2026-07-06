@@ -28,6 +28,21 @@ public partial class Game1
             DrawPlayerNameHud(_game._world.LocalPlayer, cameraPosition);
         }
 
+        public void DrawForcedPlayerNameHuds(Vector2 cameraPosition)
+        {
+            foreach (var player in _game.EnumerateRenderablePlayers())
+            {
+                if (!player.IsAlive
+                    || ReferenceEquals(player, _game._world.LocalPlayer)
+                    || !Game1.ShouldForceMapBotNameplate(player))
+                {
+                    continue;
+                }
+
+                DrawPlayerNameHud(player, cameraPosition, forceVisible: true);
+            }
+        }
+
         public void DrawHoveredPlayerNameHud(MouseState mouse, Vector2 cameraPosition)
         {
             var hoveredPlayer = GetHoveredPlayerForNameHud(mouse, cameraPosition);
@@ -41,10 +56,15 @@ public partial class Game1
                 return;
             }
 
+            if (Game1.ShouldForceMapBotNameplate(hoveredPlayer))
+            {
+                return;
+            }
+
             DrawPlayerNameHud(hoveredPlayer, cameraPosition);
         }
 
-        public void DrawPlayerNameHud(PlayerEntity player, Vector2 cameraPosition)
+        public void DrawPlayerNameHud(PlayerEntity player, Vector2 cameraPosition, bool forceVisible = false)
         {
             var label = GetHudPlayerLabel(player);
             if (string.IsNullOrWhiteSpace(label))
@@ -52,14 +72,14 @@ public partial class Game1
                 return;
             }
 
-            var visibilityAlpha = _game.GetPlayerVisibilityAlpha(player);
+            var visibilityAlpha = forceVisible ? 1f : _game.GetPlayerVisibilityAlpha(player);
             if (visibilityAlpha <= 0f)
             {
                 return;
             }
 
             var renderPosition = _game.GetRenderPosition(player);
-            var bounds = GetPlayerScreenBounds(player, renderPosition, cameraPosition);
+            var bounds = _game.GetPlayerScreenBounds(player, renderPosition, cameraPosition);
             var alpha = Math.Clamp(visibilityAlpha, 0.55f, 1f);
             var teamFillColor = player.Team == PlayerTeam.Blue ? new Color(0x48, 0x5C, 0x67) : new Color(0xA5, 0x46, 0x40);
             var teamOutlineColor = player.Team == PlayerTeam.Blue ? new Color(0x35, 0x44, 0x4D) : new Color(0x7E, 0x35, 0x30);
